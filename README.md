@@ -50,6 +50,25 @@ Thickness and brightness = strength. In the hall the lines arc out of the block.
 Controls: drag = look, WASD = fly, Alt+drag = orbit, click = pick (head tile, neuron, weight, any patch),
 Space = play the generation, ←/→ = step.
 
+## The pipeline, end to end: what is shown and how deep
+| Stage | In the studio |
+|---|---|
+| Prompt → tokens | all 115 tokens, coloured by word group, lit by what the selected head reads |
+| Qwen3-VL-4B text encoder | the 12 tapped layers as a token × layer activation grid (the encoder's own internals are not opened) |
+| Text fusion | its real learned 12-layer mix; the 2 refiner blocks are not shown separately |
+| Noise x_t → 2×2 patches → 4032 tokens | the noisy input of every step |
+| **28 single-stream blocks** | **fully**: residual stream, all 48 heads (10 probe points), output gates, attention/MLP writes, 16384 MLP neurons, adaLN gates, real weights |
+| Last layer → velocity → x0 guess | the preview at every step |
+| Euler step × 8 | step slider / play; the tracking tower shows all 8 |
+| VAE decode → picture | the final picture (the VAE decoder's internals are not opened) |
+
+## How the data was made
+1. `tools/capture/rs_capture_node.py`: the ComfyUI node `RSCapture` (hooks on the real Krea 2 model: every block,
+   attention per head, MLP, gates, dequantized weights). Lives in the `rs_kvshare` custom node pack.
+2. `tools/capture/studio_capture.py`: runs one generation through it (Krea 2 Turbo int8 + warmpastel 0.8 +
+   softwatercolor 0.35, 1344×768, 8 steps, seed 23) and decodes x_t and the x0 guess of every step.
+3. `tools/export_data.py`: packs it (plus SDPose tracking of each step) into `data/` for Godot.
+
 ## Honest limits
 - Head attention is stored for 10 probe points (book, both hands, both elbows, right shoulder, face, chest, wall,
   floor); "clicked patch" attention for any patch is the mean over heads of blocks 4/10/16/22 (top 32 cells).
