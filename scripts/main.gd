@@ -28,7 +28,7 @@ const LINE_MODES := ["None", "Token → token (what the probe reads)", "Body cha
 	"Joints: fingers, wrists, elbows, shoulders, book"]
 const BODY_PROBES := 8          ## book, both hands, both elbows, shoulder, face, chest (wall and floor left out)
 const OVERLAYS := ["None", "Word: character", "Word: holding", "Word: book", "Word: hands", "Word: where",
-	"Body regions", "Background", "Clicked patch attention"]
+	"Body regions", "Background", "Clicked patch attention", "Patch grid (84 × 48)"]
 const REGION_COLS := [Color(0.25, 0.3, 0.4), Color(0.85, 0.75, 0.6), Color(1.0, 0.55, 0.7), Color(0.3, 0.85, 0.35),
 	Color(0.3, 0.6, 1.0), Color(0.4, 0.95, 1.0), Color(1.0, 0.8, 0.2), Color(1.0, 0.2, 0.55)]
 const GROUP_COLS := {"char": Color(1.0, 0.62, 0.3), "holding": Color(1.0, 0.8, 0.2), "book": Color(1.0, 0.3, 0.45),
@@ -97,6 +97,14 @@ var out_root: Node3D
 const FLOW_DZ := 4.0
 const COL_H := 1.2
 var ui_layer: CanvasLayer
+var tour_i := -1
+var tour_panel: PanelContainer
+var tour_title: Label
+var tour_text: Label
+var tour_count: Label
+var tour_back: Button
+var tour_play := false
+var tour_t := 0.0
 var flow_box: CheckBox
 var lines_menu: OptionButton
 var view_menu: OptionButton
@@ -127,11 +135,20 @@ func _ready() -> void:
 	_refresh_all()
 	cam.fly_to(Vector3(HALL_X0 + 6, 2.0, 30.0), Vector3(HALL_X0 + 6, 0.5, 0.0))
 	var args := OS.get_cmdline_user_args()
+	var scripted := false
+	for a in args:
+		if a.begins_with("--shot=") or a.begins_with("--anim=") or a.begins_with("--tour="):
+			scripted = true
+	_build_tour_panel()
+	if not scripted:
+		_tour_go(0)
 	for a in args:
 		if a.begins_with("--shot="):
 			_auto_shot(a.substr(7))
 		if a.begins_with("--anim="):
 			_auto_anim(a.substr(7))
+		if a.begins_with("--tour="):
+			_auto_tour(a.substr(7))
 
 
 # ------------------------------------------------------------------------------------------------ data helpers
@@ -706,6 +723,10 @@ func _refresh_overlay() -> void:
 		tint = Color(0.3, 0.55, 1.0)
 	elif overlay == 8 and picked_patch >= 0:
 		tex = _patch_att_tex(step)
+	elif overlay == 9:
+		tex = _grid_tex()
+		gain = 0.9
+		tint = Color(1, 1, 1)
 	overlay_mat.set_shader_parameter("data", tex)
 	overlay_mat.set_shader_parameter("opacity", 0.0 if tex == null else 0.8)
 	overlay_mat.set_shader_parameter("gain", gain)
@@ -727,6 +748,15 @@ func _refresh_overlay() -> void:
 		o.set_shader_parameter("opacity", 0.0 if t2 == null else 0.75)
 		o.set_shader_parameter("gain", gain)
 		o.set_shader_parameter("tint", Vector3(tint.r, tint.g, tint.b))
+
+
+## a checkerboard with one square per patch: shows how the picture is cut into 84 x 48 tokens
+func _grid_tex() -> ImageTexture:
+	var img := Image.create_empty(84, 48, false, Image.FORMAT_L8)
+	for r in 48:
+		for c in 84:
+			img.set_pixel(c, r, Color(0.55 if (r + c) % 2 == 0 else 0.0, 0, 0))
+	return ImageTexture.create_from_image(img)
 
 
 func _labels_tex(background_only: bool) -> ImageTexture:
@@ -1295,6 +1325,10 @@ func _build_ui() -> void:
 	spd.custom_minimum_size = Vector2(100, 0)
 	spd.value_changed.connect(func(x): speed = x)
 	hb.add_child(spd)
+	var tb := Button.new()
+	tb.text = "★ Guided tour"
+	tb.pressed.connect(func(): _tour_go(0))
+	v.add_child(tb)
 	v.add_child(_caption("Probe point (whose attention the heads show)"))
 	var po := OptionButton.new()
 	for pr in meta["probes"]:
@@ -1524,6 +1558,11 @@ func _click(sp: Vector2) -> void:
 
 
 func _process(dt: float) -> void:
+	if tour_play:
+		tour_t += dt
+		if tour_t > 0.9:
+			tour_t = 0.0
+			_set_step((step + 1) % S)
 	if playing:
 		# the pulse rides the rail from the prompt to the preview; arriving there is one denoising step
 		play_x += dt * speed * (60.0 if not flow else 14.0)
@@ -1542,6 +1581,160 @@ func _process(dt: float) -> void:
 			var m: ShaderMaterial = blocks[b]["panel"]
 			m.set_shader_parameter("glow", 0.6 if b == cur else 0.0)
 			(blocks[b]["cells"]["mat"] as ShaderMaterial).set_shader_parameter("glow", 0.8 if b == cur else 0.0)
+
+
+# ------------------------------------------------------------------------------------------------ guided tour
+
+## One stop = a title, one or two plain sentences, and what the studio should show. The camera flies there by itself.
+func _tour_stops() -> Array:
+	var bp := func(b: int) -> Vector3: return Vector3(HALL_X0 + b * BLOCK_DX, 0, 0)
+	return [
+		["Where we end up",
+			"A boy holding a red book above his head, drawn by Krea 2 in 8 steps. This studio replays that one real drawing from the inside, layer by layer.",
+			func(): _tour_state(7, 0, 0, 0, false, 18); cam.fly_to(Vector3(out_x + 16, 1.0, 15), Vector3(out_x + 16, 0.5, 0))],
+		["It starts as noise",
+			"Step 1 of 8: pure noise. At every step the model guesses the finished picture and removes a little of the noise.",
+			func(): _tour_state(0, 0, 0, 0, false, 0); cam.fly_to(Vector3(15, 0.8, 9.5), Vector3(15, 0.3, 0))],
+		["Cut into patches",
+			"The picture is cut into 84 × 48 = 4,032 patches of 16 × 16 pixels. Each patch becomes one token: a list of 6,144 numbers.",
+			func(): _tour_state(5, 0, 9, 0, false, 0); cam.fly_to(Vector3(15, 0.8, 7.5), Vector3(15, 0.3, 0))],
+		["The words",
+			"The prompt becomes 115 word tokens. They sit in the same row as the patches, so every patch can read every word.",
+			func(): _tour_state(5, 0, 0, 0, false, 18); cam.fly_to(Vector3(0, 4.6, 9.5), Vector3(0, 4.3, 0))],
+		["Block 0: the first layer",
+			"These columns are the 4,032 patch tokens after the first of 28 layers. Colour = what each patch means to the model. Here it is still mostly local colour and texture.",
+			func(): _tour_state(5, 0, 0, 0, false, 0); cam.fly_to(bp.call(0) + Vector3(5, 2, 11), bp.call(0) + Vector3(0, 0.3, 0))],
+		["48 attention heads",
+			"Each tile is one head: a heat map of where the book's patch looks. Gold frames mostly read the words, blue frames read the picture. The bars above show which words.",
+			func(): _tour_state(5, 5, 0, 0, false, 0); cam.fly_to(bp.call(0) + Vector3(0, 4.0, 6.0), bp.call(0) + Vector3(0, 3.5, 0))],
+		["Block 12: the boy appears",
+			"Twelve layers in, the patches of the boy start to share one colour: the model is beginning to treat him as one thing.",
+			func(): _tour_state(5, 0, 0, 0, false, 12); cam.fly_to(bp.call(12) + Vector3(4, 2, 11), bp.call(12) + Vector3(0, 0.3, 0))],
+		["Block 18: one shape",
+			"Now the boy is one green shape against the classroom. Each layer only adds a little, and here it adds up.",
+			func(): _tour_state(5, 0, 0, 0, false, 18); cam.fly_to(bp.call(18) + Vector3(4, 2, 11), bp.call(18) + Vector3(0, 0.3, 0))],
+		["The body is a chain",
+			"Lines show which body parts read each other: book, hands, elbows, shoulder, face. Each part reads its neighbour, like links in an arm.",
+			func(): _tour_state(5, 0, 0, 2, false, 18); cam.fly_to(bp.call(18) + Vector3(-3, -1, 9), bp.call(18) + Vector3(0, 1, 0))],
+		["Keys and locks",
+			"Blue = what attention wrote, red = what the MLP wrote, white = both. In the late blocks the MLP mostly writes where attention wrote.",
+			func(): _tour_state(5, 2, 0, 0, false, 22); cam.fly_to(bp.call(22) + Vector3(5, 3, 10), bp.call(22) + Vector3(0, 0.5, 0))],
+		["Layer to layer",
+			"All 28 blocks, stacked. Each block reads what the block before it wrote; the lines show what the book reads one layer back.",
+			func(): _tour_state(5, 0, 0, 1, true, 12); _go(Vector3(-2, 0, 0))],
+		["Eight steps",
+			"The model's guess at each of the 8 steps, playing on a loop. The layout settles first; the details come last.",
+			func(): _tour_state(0, 0, 0, 0, false, 18); tour_play = true; cam.fly_to(Vector3(out_x, 0.8, 9.5), Vector3(out_x, 0.3, 0))],
+		["Tracking the arm",
+			"The 8 guesses stacked in depth, step 1 in front. The coloured paths follow the wrists, elbows and shoulders through time: the book and hands settle first, the elbow last.",
+			func(): _tour_state(7, 0, 0, 0, false, 18); _go(Vector3(tower_x, 0, 0))],
+		["Your turn",
+			"Drag to look, WASD to fly. Click a head tile, a neuron or any patch. Space plays the whole generation. The menus on the left change what every block shows.",
+			func(): _tour_state(5, 0, 0, 0, false, 18); cam.fly_to(bp.call(18) + Vector3(4, 2, 11), bp.call(18) + Vector3(0, 0.3, 0))],
+	]
+
+
+func _tour_state(st: int, v: int, ov: int, ln: int, fl: bool, b: int) -> void:
+	tour_play = false
+	if flow != fl:
+		flow = fl
+		flow_box.set_pressed_no_signal(fl)
+		_apply_layout()
+	view = v
+	overlay = ov
+	lines_mode = ln
+	sel_block = b
+	sel_head = 0
+	sel_neuron = -1
+	if block_slider:
+		block_slider.set_value_no_signal(b)
+	_set_step(st)
+	_refresh_all()
+
+
+func _tour_go(i: int) -> void:
+	var stops := _tour_stops()
+	if i < 0 or i >= stops.size():
+		tour_i = -1
+		tour_play = false
+		tour_panel.visible = false
+		return
+	tour_i = i
+	var st: Array = stops[i]
+	tour_title.text = st[0]
+	tour_text.text = st[1]
+	tour_count.text = "%d / %d" % [i + 1, stops.size()]
+	tour_back.disabled = i == 0
+	tour_panel.visible = true
+	(st[2] as Callable).call()
+
+
+func _build_tour_panel() -> void:
+	tour_panel = PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.08, 0.045, 0.93)
+	sb.border_color = Color(1.0, 0.72, 0.35, 0.8)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(10)
+	sb.content_margin_left = 18
+	sb.content_margin_right = 18
+	sb.content_margin_top = 12
+	sb.content_margin_bottom = 12
+	tour_panel.add_theme_stylebox_override("panel", sb)
+	tour_panel.anchor_left = 0.5
+	tour_panel.anchor_right = 0.5
+	tour_panel.anchor_top = 1.0
+	tour_panel.anchor_bottom = 1.0
+	tour_panel.offset_left = -390
+	tour_panel.offset_right = 390
+	tour_panel.offset_top = -190
+	tour_panel.offset_bottom = -16
+	ui_layer.add_child(tour_panel)
+	var v := VBoxContainer.new()
+	tour_panel.add_child(v)
+	tour_title = Label.new()
+	tour_title.add_theme_font_size_override("font_size", 22)
+	tour_title.add_theme_color_override("font_color", Color(1, 0.8, 0.5))
+	v.add_child(tour_title)
+	tour_text = Label.new()
+	tour_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tour_text.custom_minimum_size = Vector2(740, 64)
+	tour_text.add_theme_font_size_override("font_size", 17)
+	v.add_child(tour_text)
+	var h := HBoxContainer.new()
+	h.alignment = BoxContainer.ALIGNMENT_END
+	v.add_child(h)
+	var close := Button.new()
+	close.text = "Close tour"
+	close.pressed.connect(func(): _tour_go(-1))
+	h.add_child(close)
+	var gap := Control.new()
+	gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h.add_child(gap)
+	tour_back = Button.new()
+	tour_back.text = "◀ Back"
+	tour_back.pressed.connect(func(): _tour_go(tour_i - 1))
+	h.add_child(tour_back)
+	tour_count = Label.new()
+	tour_count.custom_minimum_size = Vector2(60, 0)
+	tour_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	h.add_child(tour_count)
+	var nx := Button.new()
+	nx.text = "Next ▶"
+	nx.pressed.connect(func(): _tour_go(tour_i + 1))
+	h.add_child(nx)
+	tour_panel.visible = false
+
+
+## --tour=<dir>: screenshot every stop of the tour, then quit
+func _auto_tour(dir: String) -> void:
+	DirAccess.make_dir_recursive_absolute(dir)
+	await get_tree().create_timer(1.0).timeout
+	for i in _tour_stops().size():
+		_tour_go(i)
+		await get_tree().create_timer(2.2).timeout
+		get_viewport().get_texture().get_image().save_png("%s/tour_%02d.png" % [dir, i + 1])
+	get_tree().quit()
 
 
 # ------------------------------------------------------------------------------------------------ animations
