@@ -96,6 +96,7 @@ var noise_root: Node3D
 var out_root: Node3D
 const FLOW_DZ := 4.0
 const COL_H := 1.2
+var ui_layer: CanvasLayer
 var flow_box: CheckBox
 var lines_menu: OptionButton
 var view_menu: OptionButton
@@ -129,6 +130,8 @@ func _ready() -> void:
 	for a in args:
 		if a.begins_with("--shot="):
 			_auto_shot(a.substr(7))
+		if a.begins_with("--anim="):
+			_auto_anim(a.substr(7))
 
 
 # ------------------------------------------------------------------------------------------------ data helpers
@@ -1251,6 +1254,7 @@ func _ints(a: Array) -> String:
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	ui_layer = layer
 	var panel := PanelContainer.new()
 	panel.position = Vector2(10, 10)
 	panel.custom_minimum_size = Vector2(330, 0)
@@ -1540,6 +1544,76 @@ func _process(dt: float) -> void:
 			(blocks[b]["cells"]["mat"] as ShaderMaterial).set_shader_parameter("glow", 0.8 if b == cur else 0.0)
 
 
+# ------------------------------------------------------------------------------------------------ animations
+
+## --anim=<dir>: record frame sequences for the README GIFs, then quit
+func _auto_anim(dir: String) -> void:
+	DirAccess.make_dir_recursive_absolute(dir)
+	await get_tree().create_timer(1.0).timeout
+	cam.smoothing = 1000.0                       # the camera follows the script exactly while recording
+	ui_layer.visible = false                     # clean frames for the GIFs
+	# 1. the picture emerges in the residual stream of block 18, step by step, as 3D columns
+	view = 0
+	lines_mode = 2
+	sel_block = 18
+	var rp: Vector3 = blocks[18]["root"].position
+	cam.fly_to(rp + Vector3(5, 2.5, 10), rp + Vector3(0, 0.5, 0))
+	var f := 0
+	for s in S:
+		_set_step(s)
+		for k in 6:
+			await _grab(dir, "steps", f)
+			f += 1
+	# 2. keys & locks: orbit block 22
+	view = 2
+	lines_mode = 1
+	sel_block = 22
+	_set_step(5)
+	rp = blocks[22]["root"].position
+	f = 0
+	for k in 60:
+		var a := -0.9 + 1.8 * k / 59.0
+		cam.fly_to(rp + Vector3(sin(a) * 11, 3, cos(a) * 11), rp + Vector3(0, 0.8, 0))
+		await _grab(dir, "orbit", f)
+		f += 1
+	# 3. flow: the residual stream travels layer to layer
+	flow = true
+	flow_box.set_pressed_no_signal(true)
+	_apply_layout()
+	view = 0
+	lines_mode = 2
+	_refresh_all()
+	f = 0
+	for k in 90:
+		var z := -k * (B + 1) * FLOW_DZ / 89.0
+		cam.fly_to(Vector3(HALL_X0 + 14, 6, z + 14), Vector3(HALL_X0, 0, z - 4))
+		pulse.position = Vector3(HALL_X0, -PH / 2 - 0.3, z - 4)
+		await _grab(dir, "flow", f)
+		f += 1
+	flow = false
+	flow_box.set_pressed_no_signal(false)
+	_apply_layout()
+	# 4. the preview with the joints and their links, step by step
+	lines_mode = 3
+	overlay = 6
+	f = 0
+	cam.fly_to(Vector3(out_x, 1.0, 6.5), Vector3(out_x, 0.8, 0))
+	for s in S:
+		_set_step(s)
+		for k in 6:
+			await _grab(dir, "joints", f)
+			f += 1
+	get_tree().quit()
+
+
+func _grab(dir: String, name: String, f: int) -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var img := get_viewport().get_texture().get_image()
+	img.resize(800, 450, Image.INTERPOLATE_BILINEAR)
+	img.save_jpg("%s/%s_%03d.jpg" % [dir, name, f], 0.9)
+
+
 # ------------------------------------------------------------------------------------------------ verification
 
 ## --shot=<dir>: fly to a few stations, save screenshots, quit. Lets the build be looked at without a person.
@@ -1558,6 +1632,11 @@ func _auto_shot(dir: String) -> void:
 		["flow", func(): flow = true; flow_box.set_pressed_no_signal(true); _apply_layout(); lines_mode = 2; view = 0; _refresh_blocks(); _refresh_lines(); _go(Vector3(-2, 0, 0))],
 		["flowtok", func(): lines_mode = 1; _refresh_lines(); _select_block(12, true)],
 		["joints", func(): flow = false; flow_box.set_pressed_no_signal(false); _apply_layout(); lines_mode = 3; overlay = 0; _refresh_overlay(); _set_step(7); cam.fly_to(Vector3(out_x, 1.0, 5.5), Vector3(out_x, 1.0, 0))],
+		["heads3d", func(): view = 0; lines_mode = 0; _set_step(5); var rp: Vector3 = blocks[14]["root"].position; cam.fly_to(rp + Vector3(2.5, 6.5, 5), rp + Vector3(0, 3.6, 0))],
+		["mlp_wall", func(): var rp: Vector3 = blocks[14]["root"].position; cam.fly_to(rp + Vector3(1, -7.5, 5), rp + Vector3(-1.5, -4.6, 0))],
+		["probe_attention", func(): view = 5; probe = 1; lines_mode = 1; _refresh_all(); var rp: Vector3 = blocks[20]["root"].position; sel_block = 20; _refresh_lines(); cam.fly_to(rp + Vector3(-6, 3, 9), rp + Vector3(0, 0.5, 0))],
+		["word_overlay", func(): view = 8; overlay = 4; lines_mode = 0; _refresh_all(); var rp: Vector3 = blocks[10]["root"].position; cam.fly_to(rp + Vector3(0, 0.5, 8), rp)],
+		["hall_3d", func(): view = 0; overlay = 0; probe = 0; _refresh_all(); cam.fly_to(Vector3(HALL_X0 + 60, 14, 40), Vector3(HALL_X0 + 100, 0, 0))],
 		["hands", func(): overlay = 6; _refresh_overlay(); _set_step(7); cam.fly_to(Vector3(out_x, 1.2, 3.2), Vector3(out_x, 1.2, 0))],
 	]
 	for item in plan:
