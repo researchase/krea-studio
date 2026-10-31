@@ -5,6 +5,14 @@ the real 28-block model (real weights) by the `RSCapture` node in `/mnt/nvme1tb/
 (`experiments/studio_capture.py`), then packed by `tools/export_data.py`. The picture: "...holding a red book with both
 hands high above his head", seed 23 (the same picture as `leadlag/head_s23`, so its SDPose tracking lines up exactly).
 
+![Block 18's residual stream as 3D columns: the boy in green relief, with body-chain links](docs/residual_3d.jpg)
+
+| | |
+|---|---|
+| ![The 28 blocks stacked: the residual stream flows layer to layer](docs/flow.jpg) | ![Inside the flow: token-to-token lines from the book to what it reads](docs/flow_tokens.jpg) |
+| ![Keys & locks: attention write (blue) vs MLP write (red), white = both](docs/keys_locks.jpg) | ![All 48 heads of a block, each a heat map of where it looks](docs/heads.jpg) |
+| ![Tracking: body regions, SDPose skeleton and hand keypoints on the preview](docs/tracking.jpg) | ![The tracking tower: 8 denoising steps in depth, joints threaded through time](docs/tower.jpg) |
+
 Run: `~/apps/Godot_v4.7.2-stable_linux.x86_64 --path ~/godot/KreaStudio`
 Screenshot tour (no person needed): add `-- --shot=/some/dir`.
 
